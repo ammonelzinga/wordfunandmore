@@ -1,0 +1,692 @@
+import React, { useState } from "react";
+async function isValidFragment(fragment) {
+  if (!fragment) return false;
+  const res = await fetch(`https://api.datamuse.com/words?sp=${fragment}*`);
+  const words = await res.json();
+  return words.length > 0;
+}
+
+async function isCompleteWord(fragment) {
+  if (!fragment || fragment.length < 4) return false;
+  const res = await fetch(`https://api.datamuse.com/words?sp=${fragment}`);
+  const words = await res.json();
+  return words.some(w => w.word === fragment);
+}
+
+async function findValidWord(fragment) {
+  if (!fragment) return null;
+  const res = await fetch(`https://api.datamuse.com/words?sp=${fragment}*&max=1`);
+  const words = await res.json();
+  return words.length > 0 ? words[0].word : null;
+}
+
+const defaultPlayers = [
+  { name: "Player 1", lives: 0, isOut: false },
+  { name: "Player 2", lives: 0, isOut: false }
+];
+
+export default function GhostGame() {
+  const [fragment, setFragment] = useState("");
+  const [players, setPlayers] = useState(defaultPlayers);
+  const [turn, setTurn] = useState(0);
+  const [history, setHistory] = useState([]);
+  const [message, setMessage] = useState("");
+  const [mode, setMode] = useState("passnplay"); // "passnplay" or "bot"
+  const [gameSetup, setGameSetup] = useState(true);
+  const [playerCount, setPlayerCount] = useState(2);
+  const [playerNames, setPlayerNames] = useState(["Player 1", "Player 2", "Player 3", "Player 4"]);
+  const [gameWinner, setGameWinner] = useState(null);
+  const [challengeMode, setChallengeMode] = useState(false);
+  const [challengeWord, setChallengeWord] = useState("");
+  const [challengeTarget, setChallengeTarget] = useState(null);
+
+  const getGhostLetters = (lives) => {
+    const letters = "GHOST";
+    return letters.substring(0, lives);
+  };
+
+  const getActivePlayers = () => {
+    return players.filter(p => !p.isOut);
+  };
+
+  const addPlayerLife = (playerIndex) => {
+    const newPlayers = [...players];
+    newPlayers[playerIndex].lives++;
+    if (newPlayers[playerIndex].lives >= 5) {
+      newPlayers[playerIndex].isOut = true;
+    }
+    setPlayers(newPlayers);
+    
+    // Check for winner
+    const activePlayers = newPlayers.filter(p => !p.isOut);
+    if (activePlayers.length === 1) {
+      setGameWinner(activePlayers[0].name);
+    }
+  };
+
+  const setupGame = () => {
+    const newPlayers = [];
+    for (let i = 0; i < playerCount; i++) {
+      newPlayers.push({
+        name: playerNames[i] || `Player ${i + 1}`,
+        lives: 0,
+        isOut: false
+      });
+    }
+    setPlayers(newPlayers);
+    setGameSetup(false);
+    setTurn(0);
+    setFragment("");
+    setHistory([]);
+    setMessage("");
+    setGameWinner(null);
+  };
+
+  async function addLetter(letter) {
+    if (gameWinner) return;
+    
+    const newFragment = fragment + letter;
+    const currentPlayer = mode === "bot" ? (turn % 2 === 0 ? 0 : "bot") : turn;
+    const playerName = mode === "bot" ? (turn % 2 === 0 ? "You" : "Bot") : players[turn].name;
+    
+    if (!(await isValidFragment(newFragment))) {
+      setMessage(`No word starts with '${newFragment}'. ${playerName} loses!`);
+      setHistory([...history, { fragment: newFragment, player: playerName, result: "lose" }]);
+      if (mode === "passnplay" && typeof currentPlayer === "number") {
+        addPlayerLife(currentPlayer);
+        setTimeout(() => nextRound(currentPlayer), 2000);
+      } else {
+        setTimeout(() => nextRound(), 2000);
+      }
+      return;
+    }
+    if (await isCompleteWord(newFragment)) {
+      setMessage(`'${newFragment}' is a complete word. ${playerName} loses!`);
+      setHistory([...history, { fragment: newFragment, player: playerName, result: "lose" }]);
+      if (mode === "passnplay" && typeof currentPlayer === "number") {
+        addPlayerLife(currentPlayer);
+        setTimeout(() => nextRound(currentPlayer), 2000);
+      } else {
+        setTimeout(() => nextRound(), 2000);
+      }
+      return;
+    }
+    setFragment(newFragment);
+    if (mode === "bot") {
+      setTurn((turn + 1) % 2);
+    } else {
+      nextTurn();
+    }
+    setMessage("");
+  }
+
+  const nextTurn = () => {
+    const activePlayers = getActivePlayers();
+    if (activePlayers.length <= 1) return;
+    
+    let nextTurnIndex = (turn + 1) % players.length;
+    while (players[nextTurnIndex].isOut) {
+      nextTurnIndex = (nextTurnIndex + 1) % players.length;
+    }
+    setTurn(nextTurnIndex);
+  };
+
+  const nextRound = (losingPlayerIndex = null) => {
+    setFragment("");
+    setChallengeMode(false);
+    setChallengeWord("");
+    setChallengeTarget(null);
+    
+    if (mode === "bot") {
+      setTurn(0);
+    } else if (losingPlayerIndex !== null && !players[losingPlayerIndex].isOut) {
+      // The losing player starts the next round
+      setTurn(losingPlayerIndex);
+    } else {
+      nextTurn();
+    }
+    setMessage("");
+  };
+
+  async function challenge() {
+    if (mode === "bot" && turn % 2 === 1) {
+      // Player is challenging the bot
+      const validWord = await findValidWord(fragment);
+      if (validWord) {
+        setMessage(`Bot wins! Valid word: "${validWord}". You lose the challenge!`);
+        setHistory([...history, { fragment, player: "You", result: "lost challenge", botWord: validWord }]);
+        setTimeout(() => nextRound(), 2000);
+      } else {
+        setMessage(`You win! Bot cannot name a valid word starting with "${fragment}".`);
+        setHistory([...history, { fragment, player: "Bot", result: "lost challenge" }]);
+        setTimeout(() => nextRound(), 2000);
+      }
+    } else if (mode === "passnplay") {
+      // Pass-n-play challenge mode
+      let challengedPlayerIndex = (turn + players.length - 1) % players.length;
+      while (players[challengedPlayerIndex].isOut) {
+        challengedPlayerIndex = (challengedPlayerIndex + players.length - 1) % players.length;
+      }
+      setChallengeTarget(challengedPlayerIndex);
+      setChallengeMode(true);
+      setMessage(`${players[challengedPlayerIndex].name} must provide a valid word starting with '${fragment}'.`);
+    }
+  }
+
+  async function submitChallengeWord() {
+    if (!challengeWord.trim() || challengeTarget === null) return;
+    
+    const word = challengeWord.toLowerCase().trim();
+    const targetPlayer = players[challengeTarget];
+    const challenger = players[turn];
+    
+    // Check if word starts with fragment
+    if (!word.startsWith(fragment.toLowerCase())) {
+      setMessage(`"${word}" doesn't start with "${fragment}". ${targetPlayer.name} loses the challenge!`);
+      addPlayerLife(challengeTarget);
+      setHistory([...history, { 
+        fragment, 
+        player: targetPlayer.name, 
+        result: "lost challenge - invalid word",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(challengeTarget), 2000);
+      return;
+    }
+    
+    // Check if it's a valid word
+    const isValid = await isCompleteWord(word);
+    if (isValid) {
+      setMessage(`"${word}" is valid! ${challenger.name} loses the challenge!`);
+      addPlayerLife(turn);
+      setHistory([...history, { 
+        fragment, 
+        player: challenger.name, 
+        result: "lost challenge - word was valid",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(turn), 2000);
+    } else {
+      setMessage(`"${word}" is not a valid word! ${targetPlayer.name} loses the challenge!`);
+      addPlayerLife(challengeTarget);
+      setHistory([...history, { 
+        fragment, 
+        player: targetPlayer.name, 
+        result: "lost challenge - word not valid",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(challengeTarget), 2000);
+    }
+  }
+
+  function resetGame() {
+    setFragment("");
+    setTurn(0);
+    setHistory([]);
+    setMessage("");
+    setGameSetup(true);
+    setGameWinner(null);
+    setChallengeMode(false);
+    setChallengeWord("");
+    setChallengeTarget(null);
+  }
+
+  async function botMove() {
+    const alphabet = "abcdefghijklmnopqrstuvwxyz";
+    const options = [];
+    for (const l of alphabet) {
+      if (await isValidFragment(fragment + l) && !(await isCompleteWord(fragment + l))) {
+        options.push(l);
+      }
+    }
+    if (options.length === 0) {
+      setMessage("Bot cannot move. You win!");
+      setTimeout(() => nextRound(), 2000);
+      return;
+    }
+    const letter = options[Math.floor(Math.random() * options.length)];
+    addLetter(letter);
+  }
+
+  if (gameSetup) {
+    return (
+      <div style={{ 
+        minHeight: "100vh",
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        padding: "20px",
+        fontFamily: "system-ui, -apple-system, sans-serif"
+      }}>
+        <div style={{
+          maxWidth: "600px",
+          margin: "0 auto",
+          background: "white",
+          borderRadius: "20px",
+          padding: "40px",
+          boxShadow: "0 20px 40px rgba(0,0,0,0.1)"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
+            <button 
+              onClick={() => window.location.hash = ''}
+              style={{
+                padding: "12px 24px",
+                background: "#6c757d",
+                color: "white",
+                border: "none",
+                borderRadius: "10px",
+                cursor: "pointer",
+                fontSize: "16px",
+                fontWeight: "600"
+              }}
+            >
+              ← Back to Home
+            </button>
+            <h2 style={{ margin: 0, color: "#2c3e50", fontSize: "2.5em" }}>Classic Ghost</h2>
+            <div></div>
+          </div>
+
+          <div style={{ marginBottom: "30px" }}>
+            <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Game Mode</h3>
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ marginRight: "20px", fontSize: "18px" }}>
+                <input 
+                  type="radio" 
+                  checked={mode === "passnplay"} 
+                  onChange={() => setMode("passnplay")}
+                  style={{ marginRight: "8px", transform: "scale(1.2)" }}
+                /> 
+                Pass-n-Play
+              </label>
+              <label style={{ fontSize: "18px" }}>
+                <input 
+                  type="radio" 
+                  checked={mode === "bot"} 
+                  onChange={() => setMode("bot")}
+                  style={{ marginRight: "8px", transform: "scale(1.2)" }}
+                /> 
+                Play vs Bot
+              </label>
+            </div>
+          </div>
+
+          {mode === "passnplay" && (
+            <div style={{ marginBottom: "30px" }}>
+              <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Number of Players</h3>
+              <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+                {[2, 3, 4].map(num => (
+                  <button 
+                    key={num}
+                    onClick={() => setPlayerCount(num)}
+                    style={{
+                      padding: "10px 20px",
+                      background: playerCount === num ? "#007bff" : "#f8f9fa",
+                      color: playerCount === num ? "white" : "#495057",
+                      border: "2px solid #007bff",
+                      borderRadius: "10px",
+                      cursor: "pointer",
+                      fontSize: "16px",
+                      fontWeight: "600"
+                    }}
+                  >
+                    {num} Players
+                  </button>
+                ))}
+              </div>
+
+              <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Player Names</h3>
+              {Array.from({ length: playerCount }, (_, i) => (
+                <div key={i} style={{ marginBottom: "15px" }}>
+                  <label style={{ display: "block", marginBottom: "5px", fontWeight: "600" }}>
+                    Player {i + 1}:
+                  </label>
+                  <input
+                    type="text"
+                    value={playerNames[i]}
+                    onChange={(e) => {
+                      const newNames = [...playerNames];
+                      newNames[i] = e.target.value;
+                      setPlayerNames(newNames);
+                    }}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      border: "2px solid #ddd",
+                      borderRadius: "8px",
+                      fontSize: "16px"
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button 
+            onClick={setupGame}
+            style={{
+              width: "100%",
+              padding: "15px",
+              background: "#28a745",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "18px",
+              fontWeight: "600"
+            }}
+          >
+            Start Game
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ 
+      minHeight: "100vh",
+      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+      padding: "20px",
+      fontFamily: "system-ui, -apple-system, sans-serif"
+    }}>
+      <div style={{
+        maxWidth: "800px",
+        margin: "0 auto",
+        background: "white",
+        borderRadius: "20px",
+        padding: "40px",
+        boxShadow: "0 20px 40px rgba(0,0,0,0.1)"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
+          <button 
+            onClick={() => window.location.hash = ''}
+            style={{
+              padding: "12px 24px",
+              background: "#6c757d",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "16px",
+              fontWeight: "600"
+            }}
+          >
+            ← Back to Home
+          </button>
+          <h2 style={{ margin: 0, color: "#2c3e50", fontSize: "2.5em" }}>Classic Ghost</h2>
+          <div></div>
+        </div>
+
+        <div style={{ 
+          background: "#f8f9fa", 
+          padding: "20px", 
+          borderRadius: "15px", 
+          marginBottom: "30px",
+          border: "2px solid #e9ecef"
+        }}>
+          {mode === "passnplay" && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ margin: "0 0 15px 0", color: "#495057" }}>Players & Lives</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "15px" }}>
+                {players.map((player, i) => (
+                  <div key={i} style={{ 
+                    background: player.isOut ? "#f8d7da" : (i === turn ? "#d4edda" : "white"),
+                    padding: "15px", 
+                    borderRadius: "10px",
+                    border: "2px solid " + (player.isOut ? "#f5c6cb" : (i === turn ? "#c3e6cb" : "#dee2e6")),
+                    textAlign: "center"
+                  }}>
+                    <div style={{ 
+                      fontWeight: "bold", 
+                      fontSize: "16px",
+                      color: player.isOut ? "#721c24" : (i === turn ? "#155724" : "#495057"),
+                      marginBottom: "8px"
+                    }}>
+                      {player.name}
+                      {i === turn && !player.isOut && " (Current Turn)"}
+                      {player.isOut && " (OUT)"}
+                    </div>
+                    <div style={{ 
+                      fontSize: "20px",
+                      fontWeight: "bold",
+                      color: player.isOut ? "#721c24" : "#dc3545",
+                      fontFamily: "monospace"
+                    }}>
+                      {getGhostLetters(player.lives) || "-"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {gameWinner && (
+          <div style={{ 
+            background: "#d4edda", 
+            color: "#155724", 
+            padding: "30px", 
+            borderRadius: "15px", 
+            marginBottom: "25px",
+            textAlign: "center",
+            fontSize: "24px",
+            fontWeight: "bold",
+            border: "3px solid #c3e6cb"
+          }}>
+            🎉 {gameWinner} Wins the Game! 🎉
+          </div>
+        )}
+
+        <div style={{ 
+          background: "#e3f2fd", 
+          padding: "25px", 
+          borderRadius: "15px", 
+          marginBottom: "25px",
+          textAlign: "center"
+        }}>
+          <div style={{ fontSize: "18px", marginBottom: "15px", color: "#1565c0" }}>
+            <strong>Current Fragment:</strong>
+          </div>
+          <div style={{ 
+            fontSize: "3em", 
+            fontWeight: "bold", 
+            color: "#0d47a1",
+            fontFamily: "monospace",
+            minHeight: "1.2em",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center"
+          }}>
+            {fragment || <em style={{ fontSize: "0.6em", color: "#666" }}>(empty)</em>}
+          </div>
+        </div>
+
+        <div style={{ 
+          background: "#fff3e0", 
+          padding: "20px", 
+          borderRadius: "15px", 
+          marginBottom: "25px",
+          textAlign: "center"
+        }}>
+          <div style={{ fontSize: "18px", color: "#e65100" }}>
+            <strong>Current Turn:</strong> {mode === "bot" ? (turn % 2 === 0 ? "You" : "Bot") : (players[turn] ? players[turn].name : "")}
+          </div>
+        </div>
+
+        {challengeMode && (
+          <div style={{ 
+            background: "#fff3e0", 
+            padding: "25px", 
+            borderRadius: "15px", 
+            marginBottom: "25px",
+            border: "3px solid #ff9800"
+          }}>
+            <h4 style={{ margin: "0 0 15px 0", color: "#e65100", textAlign: "center" }}>
+              Challenge Mode
+            </h4>
+            <p style={{ margin: "0 0 15px 0", textAlign: "center", fontSize: "16px" }}>
+              {challengeTarget !== null ? players[challengeTarget].name : ""} must provide a valid word starting with "{fragment}":
+            </p>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              <input
+                type="text"
+                value={challengeWord}
+                onChange={(e) => setChallengeWord(e.target.value)}
+                placeholder="Enter word..."
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  fontSize: "16px",
+                  border: "2px solid #ddd",
+                  borderRadius: "8px"
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    submitChallengeWord();
+                  }
+                }}
+              />
+              <button 
+                onClick={submitChallengeWord}
+                style={{
+                  padding: "12px 20px",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                  fontWeight: "600"
+                }}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ 
+          display: "flex", 
+          gap: "15px", 
+          justifyContent: "center", 
+          alignItems: "center",
+          marginBottom: "25px"
+        }}>
+          <input
+            type="text"
+            maxLength={1}
+            style={{
+              width: "60px",
+              height: "60px",
+              fontSize: "2em",
+              textAlign: "center",
+              border: "3px solid #ddd",
+              borderRadius: "15px",
+              fontWeight: "bold"
+            }}
+            disabled={message || challengeMode || gameWinner || (mode === "bot" && turn % 2 === 1)}
+            onKeyDown={e => {
+              if (/^[a-zA-Z]$/.test(e.key)) {
+                addLetter(e.key.toLowerCase());
+                e.target.value = "";
+              }
+            }}
+            placeholder="?"
+          />
+          <button 
+            onClick={challenge} 
+            disabled={message || challengeMode || gameWinner || !fragment}
+            style={{
+              padding: "15px 25px",
+              background: "#dc3545",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "16px",
+              fontWeight: "600",
+              opacity: (message || challengeMode || gameWinner || !fragment) ? 0.6 : 1
+            }}
+          >
+            Challenge
+          </button>
+          <button 
+            onClick={resetGame}
+            style={{
+              padding: "15px 25px",
+              background: "#28a745",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "16px",
+              fontWeight: "600"
+            }}
+          >
+            New Game
+          </button>
+        </div>
+
+        {mode === "bot" && turn % 2 === 1 && !message && !challengeMode && !gameWinner && (
+          <div style={{ textAlign: "center", marginBottom: "25px" }}>
+            <button 
+              onClick={botMove}
+              style={{
+                padding: "15px 30px",
+                background: "#007bff",
+                color: "white",
+                border: "none",
+                borderRadius: "10px",
+                cursor: "pointer",
+                fontSize: "18px",
+                fontWeight: "600"
+              }}
+            >
+              🤖 Bot Move
+            </button>
+          </div>
+        )}
+
+        {message && (
+          <div style={{ 
+            background: "#f8d7da", 
+            color: "#721c24", 
+            padding: "20px", 
+            borderRadius: "15px", 
+            marginBottom: "25px",
+            textAlign: "center",
+            fontSize: "18px",
+            fontWeight: "600"
+          }}>
+            {message}
+          </div>
+        )}
+
+        <div style={{ 
+          background: "#f8f9fa", 
+          padding: "20px", 
+          borderRadius: "15px"
+        }}>
+          <h4 style={{ margin: "0 0 15px 0", color: "#495057" }}>Game History</h4>
+          <div style={{ maxHeight: "200px", overflowY: "auto" }}>
+            {history.length === 0 ? (
+              <p style={{ color: "#6c757d", fontStyle: "italic" }}>No moves yet...</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {history.map((h, i) => (
+                  <li key={i} style={{ 
+                    padding: "8px 0", 
+                    borderBottom: "1px solid #dee2e6",
+                    fontSize: "16px"
+                  }}>
+                    <strong>{h.player}:</strong> "{h.fragment}" - {h.result}
+                    {h.botWord && <span style={{ color: "#007bff" }}> (Bot's word: "{h.botWord}")</span>}
+                    {h.challengeWord && <span style={{ color: "#6f42c1" }}> (Word: "{h.challengeWord}")</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
