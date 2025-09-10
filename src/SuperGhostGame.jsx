@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+
 async function isValidFragment(fragment) {
   if (!fragment) return false;
   const res = await fetch(`https://api.datamuse.com/words?sp=${fragment}*`);
@@ -93,13 +94,16 @@ export default function SuperGhostGame() {
     setTurn(nextTurnIndex);
   };
 
-  const nextRound = () => {
+  const nextRound = (losingPlayerIndex = null) => {
     setFragment("");
     setChallengeMode(false);
     setChallengeWord("");
     setChallengeTarget(null);
+    
     if (mode === "bot") {
       setTurn(0);
+    } else if (losingPlayerIndex !== null && !players[losingPlayerIndex].isOut) {
+      setTurn(losingPlayerIndex);
     } else {
       nextTurn();
     }
@@ -107,52 +111,138 @@ export default function SuperGhostGame() {
   };
 
   async function addLetter(letter, position) {
+    if (gameWinner) return;
+    
     let newFragment = fragment;
-    if (position === "start") newFragment = letter + fragment;
-    else newFragment = fragment + letter;
+    if (position === "start") {
+      newFragment = letter + fragment;
+    } else {
+      newFragment = fragment + letter;
+    }
+    
+    const currentPlayer = mode === "bot" ? (turn % 2 === 0 ? 0 : "bot") : turn;
+    const playerName = mode === "bot" ? (turn % 2 === 0 ? "You" : "Bot") : players[turn].name;
+    
     if (!(await isValidFragment(newFragment))) {
-      setMessage(`No word starts with '${newFragment}'. ${players[turn]} loses!`);
-      setHistory([...history, { fragment: newFragment, player: players[turn], result: "lose" }]);
+      setMessage(`No word starts with '${newFragment}'. ${playerName} loses!`);
+      setHistory([...history, { fragment: newFragment, player: playerName, result: "lose" }]);
+      if (mode === "passnplay" && typeof currentPlayer === "number") {
+        addPlayerLife(currentPlayer);
+        setTimeout(() => nextRound(currentPlayer), 2000);
+      } else {
+        setTimeout(() => nextRound(), 2000);
+      }
       return;
     }
+    
     if (await isCompleteWord(newFragment)) {
-      setMessage(`'${newFragment}' is a complete word. ${players[turn]} loses!`);
-      setHistory([...history, { fragment: newFragment, player: players[turn], result: "lose" }]);
+      setMessage(`'${newFragment}' is a complete word. ${playerName} loses!`);
+      setHistory([...history, { fragment: newFragment, player: playerName, result: "lose" }]);
+      if (mode === "passnplay" && typeof currentPlayer === "number") {
+        addPlayerLife(currentPlayer);
+        setTimeout(() => nextRound(currentPlayer), 2000);
+      } else {
+        setTimeout(() => nextRound(), 2000);
+      }
       return;
     }
+    
     setFragment(newFragment);
-    setTurn((turn + 1) % players.length);
+    if (mode === "bot") {
+      setTurn((turn + 1) % 2);
+    } else {
+      nextTurn();
+    }
     setMessage("");
   }
 
   async function challenge() {
     if (mode === "bot" && turn % 2 === 1) {
-      // Player is challenging the bot
       const validWord = await findValidWord(fragment);
       if (validWord) {
         setMessage(`Bot wins! Valid word: "${validWord}". You lose the challenge!`);
         setHistory([...history, { fragment, player: "You", result: "lost challenge", botWord: validWord }]);
+        setTimeout(() => nextRound(), 2000);
       } else {
         setMessage(`You win! Bot cannot name a valid word starting with "${fragment}".`);
         setHistory([...history, { fragment, player: "Bot", result: "lost challenge" }]);
+        setTimeout(() => nextRound(), 2000);
       }
-    } else {
-      // Traditional challenge logic for pass-n-play
-      if (await isValidFragment(fragment)) {
-        setMessage(`${players[(turn + players.length - 1) % players.length]} must name a word starting with '${fragment}'.`);
-      } else {
-        setMessage(`${players[(turn + players.length - 1) % players.length]} cannot name a word. ${players[turn]} wins!`);
+    } else if (mode === "passnplay") {
+      let challengedPlayerIndex = (turn + players.length - 1) % players.length;
+      while (players[challengedPlayerIndex].isOut) {
+        challengedPlayerIndex = (challengedPlayerIndex + players.length - 1) % players.length;
       }
-      setHistory([...history, { fragment, player: players[turn], result: "challenge" }]);
+      setChallengeTarget(challengedPlayerIndex);
+      setChallengeMode(true);
+      setMessage(`${players[challengedPlayerIndex].name} must provide a valid word starting with '${fragment}'.`);
     }
   }
 
-  function resetGame() {
-    setFragment("");
+  async function submitChallengeWord() {
+    if (!challengeWord.trim() || challengeTarget === null) return;
+    
+    const word = challengeWord.toLowerCase().trim();
+    const targetPlayer = players[challengeTarget];
+    const challenger = players[turn];
+    
+    if (!word.startsWith(fragment.toLowerCase())) {
+      setMessage(`"${word}" doesn't start with "${fragment}". ${targetPlayer.name} loses the challenge!`);
+      addPlayerLife(challengeTarget);
+      setHistory([...history, { 
+        fragment, 
+        player: targetPlayer.name, 
+        result: "lost challenge - invalid word",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(challengeTarget), 2000);
+      return;
+    }
+    
+    const isValid = await isCompleteWord(word);
+    if (isValid) {
+      setMessage(`"${word}" is valid! ${challenger.name} loses the challenge!`);
+      addPlayerLife(turn);
+      setHistory([...history, { 
+        fragment, 
+        player: challenger.name, 
+        result: "lost challenge - valid word provided",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(turn), 2000);
+    } else {
+      setMessage(`"${word}" is not a valid word! ${targetPlayer.name} loses the challenge!`);
+      addPlayerLife(challengeTarget);
+      setHistory([...history, { 
+        fragment, 
+        player: targetPlayer.name, 
+        result: "lost challenge - invalid word",
+        challengeWord: word 
+      }]);
+      setTimeout(() => nextRound(challengeTarget), 2000);
+    }
+  }
+
+  const resetGame = () => {
+    const newPlayers = [];
+    for (let i = 0; i < playerCount; i++) {
+      newPlayers.push({
+        name: playerNames[i] || `Player ${i + 1}`,
+        lives: 0,
+        isOut: false
+      });
+    }
+    setPlayers(newPlayers);
+    setGameSetup(false);
     setTurn(0);
+    setFragment("");
     setHistory([]);
     setMessage("");
-  }
+    setGameWinner(null);
+    setChallengeMode(false);
+    setChallengeWord("");
+    setChallengeTarget(null);
+  };
 
   async function botMove() {
     const alphabet = "abcdefghijklmnopqrstuvwxyz";
@@ -171,6 +261,138 @@ export default function SuperGhostGame() {
     }
     const { l, pos } = options[Math.floor(Math.random() * options.length)];
     addLetter(l, pos);
+  }
+
+  if (gameSetup) {
+    return (
+      <div style={{ 
+        minHeight: "100vh",
+        background: "linear-gradient(135deg, #fc466b 0%, #3f5efb 100%)",
+        padding: "20px",
+        fontFamily: "system-ui, -apple-system, sans-serif"
+      }}>
+        <div style={{
+          maxWidth: "600px",
+          margin: "0 auto",
+          background: "white",
+          borderRadius: "20px",
+          padding: "40px",
+          boxShadow: "0 20px 40px rgba(0,0,0,0.1)"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
+            <button 
+              onClick={() => window.location.hash = ''}
+              style={{
+                padding: "12px 24px",
+                background: "#6c757d",
+                color: "white",
+                border: "none",
+                borderRadius: "10px",
+                cursor: "pointer",
+                fontSize: "16px",
+                fontWeight: "600"
+              }}
+            >
+              ← Back to Home
+            </button>
+            <h2 style={{ margin: 0, color: "#2c3e50", fontSize: "2.5em" }}>SuperGhost Setup</h2>
+            <div></div>
+          </div>
+
+          <div style={{ marginBottom: "30px" }}>
+            <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Game Mode</h3>
+            <div style={{ display: "flex", gap: "20px", marginBottom: "20px" }}>
+              <label style={{ fontSize: "18px", display: "flex", alignItems: "center" }}>
+                <input 
+                  type="radio" 
+                  checked={mode === "passnplay"} 
+                  onChange={() => setMode("passnplay")}
+                  style={{ marginRight: "8px", transform: "scale(1.2)" }}
+                /> 
+                Pass-n-Play
+              </label>
+              <label style={{ fontSize: "18px", display: "flex", alignItems: "center" }}>
+                <input 
+                  type="radio" 
+                  checked={mode === "bot"} 
+                  onChange={() => setMode("bot")}
+                  style={{ marginRight: "8px", transform: "scale(1.2)" }}
+                /> 
+                Play vs Bot
+              </label>
+            </div>
+          </div>
+
+          {mode === "passnplay" && (
+            <div style={{ marginBottom: "30px" }}>
+              <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Number of Players</h3>
+              <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+                {[2, 3, 4].map(num => (
+                  <button 
+                    key={num}
+                    onClick={() => setPlayerCount(num)}
+                    style={{
+                      padding: "10px 20px",
+                      background: playerCount === num ? "#007bff" : "#f8f9fa",
+                      color: playerCount === num ? "white" : "#495057",
+                      border: "2px solid #007bff",
+                      borderRadius: "10px",
+                      cursor: "pointer",
+                      fontSize: "16px",
+                      fontWeight: "600"
+                    }}
+                  >
+                    {num} Players
+                  </button>
+                ))}
+              </div>
+
+              <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>Player Names</h3>
+              {Array.from({ length: playerCount }, (_, i) => (
+                <div key={i} style={{ marginBottom: "15px" }}>
+                  <label style={{ display: "block", marginBottom: "5px", fontWeight: "600" }}>
+                    Player {i + 1}:
+                  </label>
+                  <input
+                    type="text"
+                    value={playerNames[i]}
+                    onChange={(e) => {
+                      const newNames = [...playerNames];
+                      newNames[i] = e.target.value;
+                      setPlayerNames(newNames);
+                    }}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      border: "2px solid #ddd",
+                      borderRadius: "8px",
+                      fontSize: "16px"
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button 
+            onClick={setupGame}
+            style={{
+              width: "100%",
+              padding: "15px",
+              background: "#28a745",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              cursor: "pointer",
+              fontSize: "18px",
+              fontWeight: "600"
+            }}
+          >
+            Start Game
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -204,7 +426,7 @@ export default function SuperGhostGame() {
           >
             ← Back to Home
           </button>
-          <h2 style={{ margin: 0, color: "#2c3e50", fontSize: "2.5em" }}>Superghost</h2>
+          <h2 style={{ margin: 0, color: "#2c3e50", fontSize: "2.5em" }}>SuperGhost</h2>
           <div></div>
         </div>
 
@@ -215,27 +437,58 @@ export default function SuperGhostGame() {
           marginBottom: "30px",
           border: "2px solid #e9ecef"
         }}>
-          <div style={{ marginBottom: "20px" }}>
-            <label style={{ marginRight: "20px", fontSize: "18px" }}>
-              <input 
-                type="radio" 
-                checked={mode === "passnplay"} 
-                onChange={() => setMode("passnplay")}
-                style={{ marginRight: "8px", transform: "scale(1.2)" }}
-              /> 
-              Pass-n-Play
-            </label>
-            <label style={{ fontSize: "18px" }}>
-              <input 
-                type="radio" 
-                checked={mode === "bot"} 
-                onChange={() => setMode("bot")}
-                style={{ marginRight: "8px", transform: "scale(1.2)" }}
-              /> 
-              Play vs Bot
-            </label>
-          </div>
+          {mode === "passnplay" && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ margin: "0 0 15px 0", color: "#495057" }}>Players & Lives</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "15px" }}>
+                {players.map((player, i) => (
+                  <div key={i} style={{ 
+                    background: player.isOut ? "#f8d7da" : (i === turn ? "#d4edda" : "white"),
+                    padding: "15px", 
+                    borderRadius: "10px",
+                    border: "2px solid " + (player.isOut ? "#f5c6cb" : (i === turn ? "#c3e6cb" : "#dee2e6")),
+                    textAlign: "center"
+                  }}>
+                    <div style={{ 
+                      fontWeight: "bold", 
+                      fontSize: "16px",
+                      color: player.isOut ? "#721c24" : (i === turn ? "#155724" : "#495057"),
+                      marginBottom: "8px"
+                    }}>
+                      {player.name}
+                      {i === turn && !player.isOut && " (Current Turn)"}
+                      {player.isOut && " (OUT)"}
+                    </div>
+                    <div style={{ 
+                      fontSize: "20px",
+                      fontWeight: "bold",
+                      color: player.isOut ? "#721c24" : "#dc3545",
+                      fontFamily: "monospace"
+                    }}>
+                      {getGhostLetters(player.lives) || "-"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+
+        {gameWinner && (
+          <div style={{ 
+            background: "#d4edda", 
+            color: "#155724", 
+            padding: "30px", 
+            borderRadius: "15px", 
+            marginBottom: "25px",
+            textAlign: "center",
+            fontSize: "24px",
+            fontWeight: "bold",
+            border: "3px solid #c3e6cb"
+          }}>
+            🎉 {gameWinner} Wins the Game! 🎉
+          </div>
+        )}
 
         <div style={{ 
           background: "#e8f5e8", 
@@ -269,9 +522,76 @@ export default function SuperGhostGame() {
           textAlign: "center"
         }}>
           <div style={{ fontSize: "18px", color: "#e65100" }}>
-            <strong>Current Turn:</strong> {mode === "bot" ? (turn % 2 === 0 ? "You" : "Bot") : players[turn]}
+            <strong>Current Turn:</strong> {mode === "bot" ? (turn % 2 === 0 ? "You" : "Bot") : (players[turn] ? players[turn].name : "")}
           </div>
         </div>
+
+        <div style={{ 
+          background: "#e1f5fe", 
+          padding: "20px", 
+          borderRadius: "15px", 
+          marginBottom: "25px",
+          textAlign: "center"
+        }}>
+          <div style={{ fontSize: "16px", color: "#0277bd", marginBottom: "10px" }}>
+            <strong>SuperGhost Rules:</strong> Add letters to either the beginning or end of the fragment
+          </div>
+          <div style={{ fontSize: "14px", color: "#0288d1" }}>
+            Avoid creating complete words or fragments that can't form words
+          </div>
+        </div>
+
+        {challengeMode && (
+          <div style={{ 
+            background: "#fff3e0", 
+            padding: "25px", 
+            borderRadius: "15px", 
+            marginBottom: "25px",
+            border: "3px solid #ff9800"
+          }}>
+            <h4 style={{ margin: "0 0 15px 0", color: "#e65100", textAlign: "center" }}>
+              Challenge Mode
+            </h4>
+            <p style={{ margin: "0 0 15px 0", textAlign: "center", fontSize: "16px" }}>
+              {challengeTarget !== null ? players[challengeTarget].name : ""} must provide a valid word starting with "{fragment}":
+            </p>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              <input
+                type="text"
+                value={challengeWord}
+                onChange={(e) => setChallengeWord(e.target.value)}
+                placeholder="Enter word..."
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  fontSize: "16px",
+                  border: "2px solid #ddd",
+                  borderRadius: "8px"
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    submitChallengeWord();
+                  }
+                }}
+              />
+              <button 
+                onClick={submitChallengeWord}
+                style={{
+                  padding: "12px 20px",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                  fontWeight: "600"
+                }}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={{ 
           display: "flex", 
@@ -295,7 +615,7 @@ export default function SuperGhostGame() {
                 borderRadius: "15px",
                 fontWeight: "bold"
               }}
-              disabled={message || (mode === "bot" && turn % 2 === 1)}
+              disabled={message || challengeMode || gameWinner || (mode === "bot" && turn % 2 === 1)}
               onKeyDown={e => {
                 if (/^[a-zA-Z]$/.test(e.key)) {
                   addLetter(e.key.toLowerCase(), "end");
@@ -319,7 +639,7 @@ export default function SuperGhostGame() {
                 borderRadius: "15px",
                 fontWeight: "bold"
               }}
-              disabled={message || (mode === "bot" && turn % 2 === 1)}
+              disabled={message || challengeMode || gameWinner || (mode === "bot" && turn % 2 === 1)}
               onKeyDown={e => {
                 if (/^[a-zA-Z]$/.test(e.key)) {
                   addLetter(e.key.toLowerCase(), "start");
@@ -331,7 +651,7 @@ export default function SuperGhostGame() {
           </div>
           <button 
             onClick={challenge} 
-            disabled={message}
+            disabled={message || challengeMode || gameWinner || !fragment}
             style={{
               padding: "15px 25px",
               background: "#dc3545",
@@ -340,7 +660,8 @@ export default function SuperGhostGame() {
               borderRadius: "10px",
               cursor: "pointer",
               fontSize: "16px",
-              fontWeight: "600"
+              fontWeight: "600",
+              opacity: (message || challengeMode || gameWinner || !fragment) ? 0.6 : 1
             }}
           >
             Challenge
@@ -358,11 +679,11 @@ export default function SuperGhostGame() {
               fontWeight: "600"
             }}
           >
-            Reset
+            New Game
           </button>
         </div>
 
-        {mode === "bot" && turn % 2 === 1 && !message && (
+        {mode === "bot" && turn % 2 === 1 && !message && !challengeMode && !gameWinner && (
           <div style={{ textAlign: "center", marginBottom: "25px" }}>
             <button 
               onClick={botMove}
@@ -416,6 +737,7 @@ export default function SuperGhostGame() {
                   }}>
                     <strong>{h.player}:</strong> "{h.fragment}" - {h.result}
                     {h.botWord && <span style={{ color: "#007bff" }}> (Bot's word: "{h.botWord}")</span>}
+                    {h.challengeWord && <span style={{ color: "#6f42c1" }}> (Word: "{h.challengeWord}")</span>}
                   </li>
                 ))}
               </ul>

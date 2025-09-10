@@ -11,6 +11,26 @@ const games = [
 export default function HomePage() {
   return (
     <div style={{ padding: 32, fontFamily: "sans-serif" }}>
+      <div style={{ marginBottom: "20px" }}>
+        <button 
+          onClick={() => window.location.href = 'https://ammonelzinga.github.io/'}
+          style={{
+            padding: "12px 24px",
+            background: "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: "10px",
+            cursor: "pointer",
+            fontSize: "16px",
+            fontWeight: "600",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}
+        >
+          ← Back to Main Site
+        </button>
+      </div>
       <h1 style={{ textAlign: "center" }}>Word Fun & More</h1>
       <h2 style={{ textAlign: "center" }}>Choose a Game:</h2>
       <div style={{
